@@ -10,25 +10,34 @@ import com.example.botFSSP.models.User;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.GetFile;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
-import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Document;
+import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.chatmember.ChatMember;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.Period;
 import java.util.ArrayList;
+import java.net.URL;
 import java.util.List;
+import java.nio.file.StandardCopyOption;
 
 
 @Component
 public class TelegramBot extends TelegramLongPollingBot {
+    private static final String RESOURCES_DIR = "src/main/resources/uploads/";
     final BotConfig botConfig;
     private InlineKeyboardMarkup inlineKeyboard;
     private int page= 0;
@@ -86,11 +95,19 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             if (callbackData.equals("button1_clicked")) {
                 page = page == 0? 0: page--;
-                getExpired(chatID, page);
+                try {
+                    getExpired(chatID, page);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
             }
             else if (callbackData.equals("button2_clicked")) {
                 page++;
-                getExpired(chatID, page);
+                try {
+                    getExpired(chatID, page);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
             }
         }
         else if (update.hasMessage() && update.getMessage().hasText()){
@@ -105,8 +122,12 @@ public class TelegramBot extends TelegramLongPollingBot {
                     break;
                 case "/expired":
                     page = 0;
-                    sendMessage(chatId, "Получаю первые 10 истекающих долга");
-                    getExpired(chatId, page);
+                    sendMessage(chatId, "Получаю первые 10 истекающих/истекших долга");
+                    try {
+                        getExpired(chatId, page);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
                     break;
                 case "/getinfo":
                     sendMessage(chatId, "Введите номер ИП");
@@ -119,13 +140,61 @@ public class TelegramBot extends TelegramLongPollingBot {
                     break;
                 default:
                     String text = update.getMessage().getText();
-                    DebtorData res = containsInData(text);
+                    DebtorData res = null;
+                    try {
+                        res = containsInData(text);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
 
                     if (res != null){
                         sendMessage(chatId, res.toString());
                     }
                     else sendMessage(chatId, "Что-то пошло не так");
                     break;
+            }
+        }
+
+        else if (update.hasMessage() && update.getMessage().hasDocument()) {
+            Message message = update.getMessage();
+            Document document = message.getDocument();
+
+            try {
+                // Получаем путь к файлу в Telegram
+                GetFile getFile = new GetFile(document.getFileId());
+                String filePath = execute(getFile).getFilePath();
+
+                // Скачиваем файл
+                String fileUrl = "https://api.telegram.org/file/bot" + getBotToken() + "/" + filePath;
+                if (!document.getFileName().contains(".xlsx")){
+                    sendMessage(update.getMessage().getChatId(), "Неправильный формат, нужен .xlsx файл");
+                    return;
+                }
+
+                String fileName = "Data.xlsx";
+                Path destinationPath = Paths.get(RESOURCES_DIR + fileName);
+
+                // Создаем директорию, если её нет
+                Files.createDirectories(Paths.get(RESOURCES_DIR));
+
+                // Загружаем файл в папку resources
+                try (InputStream in = new URL(fileUrl).openStream()) {
+                    Files.copy(in, destinationPath, StandardCopyOption.REPLACE_EXISTING);
+                    System.out.println("Файл сохранен: " + destinationPath);
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            try {
+                checkLoadedData(message.getChatId());
+            } catch (Exception e) {
+                sendMessage(message.getChatId(),
+                        "столбцы должны быто названны в определенном порядке: \n" +
+                        "№ п/п, " + "Статус, " + "Подразделение ОСП," +"Дата завершения ИП, " +
+                        "Регистрационный номер ИП, " +"Дата возбуждения, " + "Взыскатель, " +
+                        "Сумма долга, " + "Остаток долга, " + "Тип должника");
+                throw new RuntimeException(e);
             }
         }
     }
@@ -152,7 +221,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     @Scheduled(cron = "0 0 9 * * ?")
-    public void sendDailyMessage() {
+    public void sendDailyMessage() throws IOException {
         String message = "Ежедневная рассылка: \n" +  getTodayExpired();
 
         for (User user : users) {
@@ -178,7 +247,6 @@ public class TelegramBot extends TelegramLongPollingBot {
             System.out.println(e.getMessage());
         }
     }
-
     private void sendMessage(long chatId, String textToSend){
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
@@ -191,12 +259,13 @@ public class TelegramBot extends TelegramLongPollingBot {
             System.out.println(e.getMessage());
         }
     }
-    private String getTodayExpired() {
-        String fileName = "src/main/resources/Data.xlsx";
+    private String getTodayExpired() throws IOException {
+        Path filePath = Paths.get(RESOURCES_DIR + "Data.xlsx");
+        InputStream data = Files.newInputStream(filePath);
         List<DebtorData> result = new ArrayList<>();
         final String[] text = new String[1];
 
-        EasyExcel.read(fileName, DebtorData.class, new ReadListener<DebtorData>() {
+        EasyExcel.read(data, DebtorData.class, new ReadListener<DebtorData>() {
             @Override
             public void invoke(DebtorData data, AnalysisContext context) {
                 Period period = Period.between(data.getStartDate().toLocalDate(), LocalDateTime.now().toLocalDate());
@@ -223,10 +292,12 @@ public class TelegramBot extends TelegramLongPollingBot {
         }).excelType(ExcelTypeEnum.XLSX).sheet().doRead();
         return text[0];
     }
-    private DebtorData containsInData(String number){
-        String fileName = "src/main/resources/Data.xlsx";
+    private DebtorData containsInData(String number) throws IOException {
+        Path filePath = Paths.get(RESOURCES_DIR + "Data.xlsx");
+        InputStream data = Files.newInputStream(filePath);
+
         List<DebtorData> result = new ArrayList<>();
-        EasyExcel.read(fileName, DebtorData.class, new ReadListener<DebtorData>() {
+        EasyExcel.read(data, DebtorData.class, new ReadListener<DebtorData>() {
 
             @Override
             public void invoke(DebtorData data, AnalysisContext context) {
@@ -247,30 +318,37 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         return result.get(0);
     }
-    private void getExpired(long chatID, int page){
-        String fileName = "src/main/resources/Data.xlsx";
+    private void getExpired(long chatID, int page) throws IOException {
+        Path filePath = Paths.get(RESOURCES_DIR + "Data.xlsx");
+        InputStream data = Files.newInputStream(filePath);
         final int maxRows = 10;
         List<DebtorData> result = new ArrayList<>();
 
-        EasyExcel.read(fileName, DebtorData.class, new ReadListener<DebtorData>() {
+        EasyExcel.read(data, DebtorData.class, new ReadListener<DebtorData>() {
             private int rowCount = 0;
             private int counter = 0;
             @Override
             public void invoke(DebtorData data, AnalysisContext context) {
+                try {
+                    if (rowCount < maxRows) {
+                        Period period = Period.between(data.getStartDate().toLocalDate(), LocalDateTime.now().toLocalDate());
 
-                ///todo добавить обработку даты
-                if (rowCount < maxRows) {
-                    Period period = Period.between(data.getStartDate().toLocalDate(), LocalDateTime.now().toLocalDate());
-
-                    if (period.getYears() == 2 && period.getMonths() >= 11 || period.getYears() >= 3) {
-                        if (counter < page * 10){
-                            counter++;
-                        }
-                        else {
-                            result.add(data);
-                            rowCount++;
+                        if (period.getYears() == 2 && period.getMonths() >= 11 || period.getYears() >= 3) {
+                            if (counter < page * 10) {
+                                counter++;
+                            } else {
+                                result.add(data);
+                                rowCount++;
+                            }
                         }
                     }
+                }
+                catch (Exception e){
+                    sendMessage(chatID, "столбцы должны быто названны в определенном порядке: \n" +
+                            "№ п/п, " + "Статус, " + "Подразделение ОСП," +"Дата завершения ИП, " +
+                            "Регистрационный номер ИП, " +"Дата возбуждения, " + "Взыскатель, " +
+                            "Сумма долга, " + "Остаток долга, " + "Тип должника");
+                    throw new RuntimeException(e);
                 }
             }
 
@@ -288,5 +366,34 @@ public class TelegramBot extends TelegramLongPollingBot {
             }
         }).excelType(ExcelTypeEnum.XLSX).sheet().doRead();
 
+    }
+
+    private void checkLoadedData(long chatID) throws IOException {
+        Path filePath = Paths.get(RESOURCES_DIR + "Data.xlsx");
+        InputStream data = Files.newInputStream(filePath);
+        EasyExcel.read(data, DebtorData.class, new ReadListener<DebtorData>() {
+            boolean flag = true;
+            @Override
+            public void invoke(DebtorData data, AnalysisContext context) {
+                try {
+                    if (flag){
+                        System.out.println(data.getNumber());
+                        flag = !flag;
+                    }
+                }
+                catch (Exception e){
+                    sendMessage(chatID, "столбцы должны быто названны в определенном порядке: \n" +
+                            "№ п/п, " + "Статус, " + "Подразделение ОСП," +"Дата завершения ИП, " +
+                            "Регистрационный номер ИП, " +"Дата возбуждения, " + "Взыскатель, " +
+                            "Сумма долга, " + "Остаток долга, " + "Тип должника");
+                    throw new RuntimeException(e);
+                }
+            }
+
+            @Override
+            public void doAfterAllAnalysed(AnalysisContext context) {
+
+            }
+        }).excelType(ExcelTypeEnum.XLSX).sheet().doRead();
     }
 }
