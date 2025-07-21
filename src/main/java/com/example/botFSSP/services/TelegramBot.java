@@ -38,6 +38,7 @@ import java.nio.file.StandardCopyOption;
 @Component
 public class TelegramBot extends TelegramLongPollingBot {
     private static final String RESOURCES_DIR = "src/main/resources/uploads/";
+    private static final String TEST_DIR = "src/main/resources/";
     final BotConfig botConfig;
     private InlineKeyboardMarkup inlineKeyboard;
     private int page= 0;
@@ -172,10 +173,10 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
 
                 String fileName = "Data.xlsx";
-                Path destinationPath = Paths.get(RESOURCES_DIR + fileName);
+                Path destinationPath = Paths.get(TEST_DIR + fileName);
 
                 // Создаем директорию, если её нет
-                Files.createDirectories(Paths.get(RESOURCES_DIR));
+                Files.createDirectories(Paths.get(TEST_DIR));
 
                 // Загружаем файл в папку resources
                 try (InputStream in = new URL(fileUrl).openStream()) {
@@ -188,7 +189,16 @@ public class TelegramBot extends TelegramLongPollingBot {
             }
             try {
                 checkLoadedData(message.getChatId());
+                String fileName = "Data.xlsx";
+                Path destinationPath = Paths.get(RESOURCES_DIR + fileName);
+                Files.copy(Files.newInputStream(Path.of(TEST_DIR + fileName)), destinationPath, StandardCopyOption.REPLACE_EXISTING);
+                Files.delete(Path.of(TEST_DIR + fileName));
             } catch (Exception e) {
+                try {
+                    Files.delete(Path.of(TEST_DIR + "Data.xlsx"));
+                } catch (IOException ex) {
+                    throw new RuntimeException(ex);
+                }
                 sendMessage(message.getChatId(),
                         "столбцы должны быто названны в определенном порядке: \n" +
                         "№ п/п, " + "Статус, " + "Подразделение ОСП," +"Дата завершения ИП, " +
@@ -369,7 +379,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void checkLoadedData(long chatID) throws IOException {
-        Path filePath = Paths.get(RESOURCES_DIR + "Data.xlsx");
+        Path filePath = Paths.get(TEST_DIR + "Data.xlsx");
         InputStream data = Files.newInputStream(filePath);
         EasyExcel.read(data, DebtorData.class, new ReadListener<DebtorData>() {
             boolean flag = true;
