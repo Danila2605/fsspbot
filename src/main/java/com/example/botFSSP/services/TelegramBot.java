@@ -1,0 +1,292 @@
+package com.example.botFSSP.services;
+
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.read.listener.ReadListener;
+import com.alibaba.excel.support.ExcelTypeEnum;
+import com.example.botFSSP.config.BotConfig;
+import com.example.botFSSP.models.DebtorData;
+import com.example.botFSSP.models.User;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.chatmember.ChatMember;
+import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
+import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+
+import java.time.LocalDateTime;
+import java.time.Period;
+import java.util.ArrayList;
+import java.util.List;
+
+
+@Component
+public class TelegramBot extends TelegramLongPollingBot {
+    final BotConfig botConfig;
+    private InlineKeyboardMarkup inlineKeyboard;
+    private int page= 0;
+    private List<User> users = new ArrayList<>();
+    public TelegramBot(BotConfig botConfig){
+        this.botConfig = botConfig;
+
+        List<BotCommand> listOfCommands = new ArrayList<>();
+        listOfCommands.add(new BotCommand("/start", "Начало работы бота"));
+        listOfCommands.add(new BotCommand("/expired", "Получение истекших сроков"));
+        listOfCommands.add(new BotCommand("/getinfo", "Получение истекшего срока по номеру"));
+        listOfCommands.add(new BotCommand("/subscribe", "Подписаться на рассылку"));
+        listOfCommands.add(new BotCommand("/unsubscribe", "отписаться от рассылки"));
+
+        try {
+            execute(new SetMyCommands(listOfCommands, new BotCommandScopeDefault(), null));
+        }
+        catch (TelegramApiException e){
+            System.out.println(e.getMessage());
+        }
+
+        // Создаем Inline-клавиатуру
+        inlineKeyboard = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+
+        // Первая строка кнопок
+        List<InlineKeyboardButton> row1 = new ArrayList<>();
+        InlineKeyboardButton button1 = new InlineKeyboardButton();
+        button1.setText("Предыдущие 10 долгов");
+        button1.setCallbackData("button1_clicked");
+        row1.add(button1);
+
+        InlineKeyboardButton button2 = new InlineKeyboardButton();
+        button2.setText("Следующие 10 долгов");
+        button2.setCallbackData("button2_clicked");
+        row1.add(button2);
+
+        rows.add(row1);
+        inlineKeyboard.setKeyboard(rows);
+    }
+    @Override
+    public String getBotToken() {
+        return botConfig.getBotToken();
+    }
+    @Override
+    public String getBotUsername() {
+        return botConfig.getBotName();
+    }
+    @Override
+    public void onUpdateReceived(Update update) {
+        if (update.hasCallbackQuery()) {
+            Integer messageId = update.getCallbackQuery().getMessage().getMessageId();
+            String callbackData = update.getCallbackQuery().getData();
+            long chatID = update.getCallbackQuery().getMessage().getChatId();
+
+            if (callbackData.equals("button1_clicked")) {
+                page = page == 0? 0: page--;
+                getExpired(chatID, page);
+            }
+            else if (callbackData.equals("button2_clicked")) {
+                page++;
+                getExpired(chatID, page);
+            }
+        }
+        else if (update.hasMessage() && update.getMessage().hasText()){
+
+            String messageText = update.getMessage().getText();
+            long chatId = update.getMessage().getChatId();
+            long userId = update.getMessage().getFrom().getId();
+
+            switch (messageText) {
+                case "/start":
+                    startCommandReceived(chatId, update.getMessage().getChat().getFirstName());
+                    break;
+                case "/expired":
+                    page = 0;
+                    sendMessage(chatId, "Получаю первые 10 истекающих долга");
+                    getExpired(chatId, page);
+                    break;
+                case "/getinfo":
+                    sendMessage(chatId, "Введите номер ИП");
+                    break;
+                case "/subscribe":
+                    subscribe(chatId, userId);
+                    break;
+                case "/unsubscribe":
+                    unsubscribe(chatId, userId);
+                    break;
+                default:
+                    String text = update.getMessage().getText();
+                    DebtorData res = containsInData(text);
+
+                    if (res != null){
+                        sendMessage(chatId, res.toString());
+                    }
+                    else sendMessage(chatId, "Что-то пошло не так");
+                    break;
+            }
+        }
+    }
+    private void subscribe(long chatId, long userId){
+        User user = new User(userId, chatId);
+        for (User u : users){
+            if (u.getId() == userId) {
+                sendMessage(chatId, "Вы уже подписанны");
+                return;
+            }
+        }
+        users.add(user);
+        sendMessage(chatId, "Вы подписанны");
+    }
+    private void unsubscribe (long chatId, long userId){
+        for (User u : users){
+            if (u.getId() == userId) {
+                users.remove(u);
+                sendMessage(chatId, "Вы отписанны");
+                return;
+            }
+        }
+        sendMessage(chatId, "Вы не подписанны");
+    }
+
+    @Scheduled(cron = "0 0 9 * * ?")
+    public void sendDailyMessage() {
+        String message = "Ежедневная рассылка: \n" +  getTodayExpired();
+
+        for (User user : users) {
+            sendMessage(user.getChatId(), message);
+        }
+    }
+
+    private void startCommandReceived(long chatId, String name){
+        String answer = "Hi " + name + ", nice to meet you!";
+
+        sendMessage(chatId, answer);
+    }
+    private void sendExpired(long chatId, String textToSend){
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(textToSend);
+        message.setReplyMarkup(inlineKeyboard);
+
+        try{
+            execute(message);
+        }
+        catch (TelegramApiException e){
+            System.out.println(e.getMessage());
+        }
+    }
+
+    private void sendMessage(long chatId, String textToSend){
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(textToSend);
+
+        try{
+            execute(message);
+        }
+        catch (TelegramApiException e){
+            System.out.println(e.getMessage());
+        }
+    }
+    private String getTodayExpired() {
+        String fileName = "src/main/resources/Data.xlsx";
+        List<DebtorData> result = new ArrayList<>();
+        final String[] text = new String[1];
+
+        EasyExcel.read(fileName, DebtorData.class, new ReadListener<DebtorData>() {
+            @Override
+            public void invoke(DebtorData data, AnalysisContext context) {
+                Period period = Period.between(data.getStartDate().toLocalDate(), LocalDateTime.now().toLocalDate());
+
+                if (period.getYears() == 2 && period.getMonths() == 11 && period.getDays() == 0) {
+                    result.add(data);
+                }
+            }
+
+            @Override
+            public void doAfterAllAnalysed(AnalysisContext context) {
+                if (result.isEmpty()) {
+                    text[0] = "Сегодня нет истекающих долгов!";
+                    return;
+                }
+                String res = "";
+                // Здесь обрабатываем накопленные данные
+                for (Object obj : result) {
+                    res += obj.toString() + "\n\n";
+                    System.out.println(obj);
+                }
+                text[0] = res;
+            }
+        }).excelType(ExcelTypeEnum.XLSX).sheet().doRead();
+        return text[0];
+    }
+    private DebtorData containsInData(String number){
+        String fileName = "src/main/resources/Data.xlsx";
+        List<DebtorData> result = new ArrayList<>();
+        EasyExcel.read(fileName, DebtorData.class, new ReadListener<DebtorData>() {
+
+            @Override
+            public void invoke(DebtorData data, AnalysisContext context) {
+                if (!result.isEmpty()) return;
+
+                if (data.getNumber().equals(number)) {
+                    result.add(data);
+                }
+            }
+
+            @Override
+            public void doAfterAllAnalysed(AnalysisContext context) {
+                if (result.isEmpty()) result.add(null);
+
+                System.out.println(result.get(0));
+            }
+        }).excelType(ExcelTypeEnum.XLSX).sheet().doRead();
+
+        return result.get(0);
+    }
+    private void getExpired(long chatID, int page){
+        String fileName = "src/main/resources/Data.xlsx";
+        final int maxRows = 10;
+        List<DebtorData> result = new ArrayList<>();
+
+        EasyExcel.read(fileName, DebtorData.class, new ReadListener<DebtorData>() {
+            private int rowCount = 0;
+            private int counter = 0;
+            @Override
+            public void invoke(DebtorData data, AnalysisContext context) {
+
+                ///todo добавить обработку даты
+                if (rowCount < maxRows) {
+                    Period period = Period.between(data.getStartDate().toLocalDate(), LocalDateTime.now().toLocalDate());
+
+                    if (period.getYears() == 2 && period.getMonths() >= 11 || period.getYears() >= 3) {
+                        if (counter < page * 10){
+                            counter++;
+                        }
+                        else {
+                            result.add(data);
+                            rowCount++;
+                        }
+                    }
+                }
+            }
+
+            @Override
+            public void doAfterAllAnalysed(AnalysisContext context) {
+                String res = "";
+                // Здесь обрабатываем накопленные данные
+                for (Object obj : result) {
+                    res += obj.toString() + "\n\n";
+                    System.out.println(obj);
+                }
+                sendExpired(chatID, res);
+
+                System.out.println("Прочитано " + rowCount + " строк");
+            }
+        }).excelType(ExcelTypeEnum.XLSX).sheet().doRead();
+
+    }
+}
