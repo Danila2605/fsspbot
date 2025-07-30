@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: botFSSP
+bot:
+  name: ${FSSP_BOT_TELEGRAM_USERNAME:default}
+  token: ${FSSP_BOT_TELEGRAM_TOKEN:default}
