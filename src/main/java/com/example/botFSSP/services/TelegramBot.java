@@ -9,6 +9,7 @@ import com.example.botFSSP.models.DebtorData;
 import com.example.botFSSP.models.User;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.util.ResourceUtils;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.GetFile;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
@@ -329,7 +330,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         return result.get(0);
     }
     private void getExpired(long chatID, int page) throws IOException {
-        Path filePath = Paths.get("classpath:Data.xlsx");
+        Path filePath = ResourceUtils.getFile("classpath:Data.xlsx").toPath();
         InputStream data = Files.newInputStream(filePath);
         final int maxRows = 10;
         List<DebtorData> result = new ArrayList<>();
