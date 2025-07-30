@@ -7,6 +7,10 @@ import com.alibaba.excel.support.ExcelTypeEnum;
 import com.example.botFSSP.config.BotConfig;
 import com.example.botFSSP.models.DebtorData;
 import com.example.botFSSP.models.User;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ResourceUtils;
@@ -42,6 +46,10 @@ import java.nio.file.StandardCopyOption;
 public class TelegramBot extends TelegramLongPollingBot {
     private static final String RESOURCES_DIR = "src/main/resources/uploads/";
     private static final String TEST_DIR = "src/main/resources/";
+
+    @Value("classpath:Data.xlsx")
+    Resource resource;
+
     final BotConfig botConfig;
     private InlineKeyboardMarkup inlineKeyboard;
     private int page= 0;
@@ -332,8 +340,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         return result.get(0);
     }
     private void getExpired(long chatID, int page) throws IOException {
-        File file = ResourceUtils.getFile("classpath:Data.xlsx");
-        InputStream data = new FileInputStream(file);
+        InputStream data = resource.getInputStream();
         final int maxRows = 10;
         List<DebtorData> result = new ArrayList<>();
 
