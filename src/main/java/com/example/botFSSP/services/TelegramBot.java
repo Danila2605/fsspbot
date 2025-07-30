@@ -23,6 +23,8 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -330,8 +332,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         return result.get(0);
     }
     private void getExpired(long chatID, int page) throws IOException {
-        Path filePath = ResourceUtils.getFile("classpath:Data.xlsx").toPath();
-        InputStream data = Files.newInputStream(filePath);
+        File file = ResourceUtils.getFile("classpath:Data.xlsx");
+        InputStream data = new FileInputStream(file);
         final int maxRows = 10;
         List<DebtorData> result = new ArrayList<>();
 
